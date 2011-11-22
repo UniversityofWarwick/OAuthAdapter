@@ -1,3 +1,19 @@
+/*
+ * Copyright 2011 University of Warwick
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 var OAuthAdapter = function(options){
 	// Optional parameters
 	
@@ -47,6 +63,10 @@ var OAuthAdapter = function(options){
     loadAccessToken();
     
     // Public methods
+    this.authorized = function(){
+    	return accessToken != null && accessTokenSecret != null;
+    };
+    
     this.send = send;
     
     // Private methods
@@ -78,7 +98,6 @@ var OAuthAdapter = function(options){
     		var client = Ti.Network.createHTTPClient();
     		client.open(method, url);
     		client.setRequestHeader("Authorization", "OAuth " + kvArrayToAuthString(message.parameters));
-    		Ti.API.debug("Auth string: " + kvArrayToAuthString(message.parameters));
     		client.onload = successCallback;
     		client.onerror = failureCallback;
     		
@@ -94,7 +113,7 @@ var OAuthAdapter = function(options){
     var kvArrayToAuthString = function(array){
     	var result = [];
     	for (var i=0, length = array.length; i<length; i++) {
-    		result.push(array[i][0] + '="' + array[i][1] + '"');
+    		result.push(OAuth.percentEncode(array[i][0]) + '="' + OAuth.percentEncode(array[i][1]) + '"');
     	}
     	return result.join(', ');
     };
@@ -113,6 +132,9 @@ var OAuthAdapter = function(options){
         } catch(ex) {
             return;
         }
+        
+        if(!config)
+        	config = {};
         
         if (!config.expiry || new Date(config.expiry) > new Date()) {
         	tokenExpiry = new Date(config.expiry);
@@ -247,7 +269,6 @@ var OAuthAdapter = function(options){
     };
 	
 	var processAccessToken = function(){
-		Ti.API.debug("Response: " + this.responseText);
 		var responseParams = OAuth.getParameterMap(this.responseText);
         accessToken = responseParams['oauth_token'];
         accessTokenSecret = responseParams['oauth_token_secret'];
@@ -256,9 +277,7 @@ var OAuthAdapter = function(options){
 	};
 	
 	var processQueue = function() {
-		Ti.API.debug("Process actions...");
-		Ti.API.debug("Queue length: " + actionsQueue.length);
-        while ((q = actionsQueue.shift()) != null)
-        	send(q);
-    };
+    while ((q = actionsQueue.shift()) != null)
+      send(q);
+  };
 }
