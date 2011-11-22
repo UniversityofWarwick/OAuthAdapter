@@ -52,15 +52,18 @@ var OAuthAdapter = function(options){
     var authWindowWebView;
     
     var actionsQueue = [];
-    
-    
+      
     // Setup
     
     Ti.include(libDirectory + 'oauth.js');
-    Ti.include(libDirectory + 'sha1.js');
+    switch(signatureMethod){
+    	case 'HMAC-SHA1': {
+    		Ti.include(libDirectory + 'sha1.js'); 
+    	} break;
+    }
     
     // Check for and load an existing access token
-    loadAccessToken();
+    loadConfig();
     
     // Public methods
     this.authorized = function(){
@@ -68,6 +71,7 @@ var OAuthAdapter = function(options){
     };
     
     this.send = send;
+    this.restartSendWithAuthorizedRequestToken = restartSendWithAuthorizedRequestToken;
     
     // Private methods
     
@@ -110,6 +114,19 @@ var OAuthAdapter = function(options){
     	}
     };
     
+    function restartSendWithAuthorizedRequestToken(options){
+    	var url = options.url;
+    	var method = options.method || 'GET';
+    	var postBody = options.postBody;
+    	requestToken = options.authorizedRequestToken;
+    	
+    	successCallback = options.successCallback;
+    	failureCallback = options.failureCallback;
+    	
+    	actionsQueue.push(options);
+    	getAccessToken();
+    };
+    
     var kvArrayToAuthString = function(array){
     	var result = [];
     	for (var i=0, length = array.length; i<length; i++) {
@@ -118,7 +135,7 @@ var OAuthAdapter = function(options){
     	return result.join(', ');
     };
     
-    function loadAccessToken(){
+    function loadConfig(){
     	var file = Ti.Filesystem.getFile(Ti.Filesystem.applicationDataDirectory, serviceName + '.oauth.config');
         if (file.exists == false) 
         	return;
@@ -142,10 +159,12 @@ var OAuthAdapter = function(options){
         		accessToken = config.accessToken;
         	if (config.accessTokenSecret) 
         		accessTokenSecret = config.accessTokenSecret;
+        	if (config.requestTokenSecret) 
+        		requestTokenSecret = config.requestTokenSecret;
         }
     };
     
-    var saveAccessToken = function(){
+    var saveConfig = function(){
         var file = Ti.Filesystem.getFile(Ti.Filesystem.applicationDataDirectory, serviceName + '.oauth.config');
         if (file == null) 
         	file = Ti.Filesystem.createFile(Ti.Filesystem.applicationDataDirectory, serviceName + '.oauth.config');
@@ -153,6 +172,7 @@ var OAuthAdapter = function(options){
         file.write(JSON.stringify({
             accessToken: accessToken,
             accessTokenSecret: accessTokenSecret,
+            requestTokenSecret: requestTokenSecret,
             expiry: tokenExpiry.valueOf()
         }));
     };
@@ -172,7 +192,6 @@ var OAuthAdapter = function(options){
     	
     	// First get the request token
     	
-
     	var message = createMessage(requestTokenURL);
         OAuth.setTimestampAndNonce(message);
         OAuth.SignatureMethod.sign(message, {
@@ -196,58 +215,25 @@ var OAuthAdapter = function(options){
         requestToken = responseParams['oauth_token'];
         requestTokenSecret = responseParams['oauth_token_secret'];
         
-        
+              
         // Then authorize the request token
         
-        authWindow = Ti.UI.createWindow({
-            modal: true,
-            navBarHidden: true
-        });
+        var resumeCallback = function(){
+        	var url = Ti.App.getArguments().url;
+        	if(url && url.indexOf(callbackURL) == 0){
+        		Ti.App.removeEventListener('resumed',resumeCallback);
+        		getAccessToken();
+        	}
+        };
+        if(Utils.GetPlatform() == 'iOS'){
+        	Ti.App.addEventListener('resumed',resumeCallback);
+        } else {
+        	// Android causes the app to restart not resume so save the config 
+        	// (essentially the requestTokenSecret) so that Android can get it when the app restarts
+        	saveConfig();
+        }
         
-		var view = Ti.UI.createView({
-
-        });
-        
-        authWindowWebView = Ti.UI.createWebView({
-    		url: authorizeTokenURL + '?oauth_token=' + requestToken + '&oauth_callback=' + encodeURIComponent(callbackURL),
-			autoDetect:[Ti.UI.AUTODETECT_NONE]
-    	});
-    	authWindowWebView.addEventListener('beforeload', detectCallbackURLTrue)
-    	authWindowWebView.addEventListener('error', detectCallbackURLFalse);
-    	view.add(authWindowWebView);
-    	
-    	var label = Ti.UI.createLabel({
-            top:0,
-            right:0,
-            width:30,
-            height:30,
-            backgroundImage: libDirectory + 'closebox.png'
-            
-		});
-		label.addEventListener('click', function(){
-			authWindow.close();
-		});
-		view.add(label);
-    	
-    	authWindow.add(view);
-    	authWindow.open();
-    };
-    
-    var detectCallbackURLTrue = function(e){
-    	if (e.source.url.indexOf(callbackURL) >= 0)
-    		completeCallback();
-    };
-    
-    var detectCallbackURLFalse = function(e){
-		if (e.source.url.indexOf(encodeURIComponent(callbackURL)) >= 0)
-    		completeCallback();
-    };
-    
-    var completeCallback = function(){
-    	authWindowWebView.removeEventListener('beforeload', detectCallbackURLTrue)
-    	authWindowWebView.removeEventListener('error', detectCallbackURLFalse);
-    	authWindow.close();
-    	getAccessToken();
+        Titanium.Platform.openURL(authorizeTokenURL + '?oauth_token=' + requestToken + '&oauth_callback=' + encodeURIComponent(callbackURL));
     };
     
     var getAccessToken = function(){    
@@ -269,15 +255,16 @@ var OAuthAdapter = function(options){
     };
 	
 	var processAccessToken = function(){
+
 		var responseParams = OAuth.getParameterMap(this.responseText);
         accessToken = responseParams['oauth_token'];
         accessTokenSecret = responseParams['oauth_token_secret'];
-        saveAccessToken();
+        saveConfig();
         processQueue();
 	};
 	
 	var processQueue = function() {
-    while ((q = actionsQueue.shift()) != null)
-      send(q);
-  };
+        while ((q = actionsQueue.shift()) != null)
+        	send(q);
+    };
 }
